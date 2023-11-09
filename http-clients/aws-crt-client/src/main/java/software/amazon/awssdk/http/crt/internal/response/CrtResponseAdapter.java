@@ -15,13 +15,13 @@
 
 package software.amazon.awssdk.http.crt.internal.response;
 
-import java.io.IOException;
+import static software.amazon.awssdk.http.crt.internal.CrtUtils.crtException;
+
 import java.nio.ByteBuffer;
 import java.util.concurrent.CompletableFuture;
 import software.amazon.awssdk.annotations.SdkInternalApi;
 import software.amazon.awssdk.crt.CRT;
 import software.amazon.awssdk.crt.http.HttpClientConnection;
-import software.amazon.awssdk.crt.http.HttpException;
 import software.amazon.awssdk.crt.http.HttpHeader;
 import software.amazon.awssdk.crt.http.HttpHeaderBlock;
 import software.amazon.awssdk.crt.http.HttpStream;
@@ -105,7 +105,7 @@ public final class CrtResponseAdapter implements HttpStreamResponseHandler {
         if (errorCode == CRT.AWS_CRT_SUCCESS) {
             onSuccessfulResponseComplete(stream);
         } else {
-            onFailedResponseComplete(stream, new HttpException(errorCode));
+            onFailedResponseComplete(stream, errorCode);
         }
     }
 
@@ -126,17 +126,9 @@ public final class CrtResponseAdapter implements HttpStreamResponseHandler {
         });
     }
 
-    private void onFailedResponseComplete(HttpStream stream, HttpException error) {
-        log.debug(() -> "HTTP response encountered an error.", error);
-
-        Throwable toThrow = error;
-
-        if (HttpClientConnection.isErrorRetryable(error)) {
-            // IOExceptions get retried, and if the CRT says this error is retryable,
-            // it's semantically an IOException anyway.
-            toThrow = new IOException(error);
-        }
-
+    private void onFailedResponseComplete(HttpStream stream, int errorCode) {
+        Throwable toThrow = crtException(errorCode);
+        log.debug(() -> "HTTP response encountered an error.", toThrow);
         responsePublisher.error(toThrow);
         failResponseHandlerAndFuture(stream, toThrow);
     }

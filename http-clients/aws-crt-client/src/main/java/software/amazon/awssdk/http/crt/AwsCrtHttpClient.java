@@ -20,11 +20,10 @@ import static software.amazon.awssdk.http.HttpMetric.HTTP_CLIENT_NAME;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.CompletionException;
 import java.util.function.Consumer;
 import software.amazon.awssdk.annotations.SdkPublicApi;
 import software.amazon.awssdk.crt.http.HttpClientConnectionManager;
-import software.amazon.awssdk.crt.http.HttpException;
 import software.amazon.awssdk.http.ExecutableHttpRequest;
 import software.amazon.awssdk.http.HttpExecuteRequest;
 import software.amazon.awssdk.http.HttpExecuteResponse;
@@ -32,11 +31,10 @@ import software.amazon.awssdk.http.SdkHttpClient;
 import software.amazon.awssdk.http.SdkHttpConfigurationOption;
 import software.amazon.awssdk.http.SdkHttpFullResponse;
 import software.amazon.awssdk.http.crt.internal.AwsCrtClientBuilderBase;
-import software.amazon.awssdk.http.crt.internal.AwsCrtHttpClientBase;
 import software.amazon.awssdk.http.crt.internal.CrtRequestContext;
 import software.amazon.awssdk.http.crt.internal.CrtRequestExecutor;
-import software.amazon.awssdk.metrics.NoOpMetricCollector;
 import software.amazon.awssdk.utils.AttributeMap;
+import software.amazon.awssdk.utils.CompletableFutureUtils;
 
 /**
  * An implementation of {@link SdkHttpClient} that uses the AWS Common Runtime (CRT) Http Client to communicate with
@@ -44,11 +42,11 @@ import software.amazon.awssdk.utils.AttributeMap;
  *
  * <p>This can be created via {@link #builder()}</p>
  * {@snippet :
- * SdkHttpClient client = software.amazon.awssdk.http.crt.AwsCrtHttpClient.builder()
- * .maxConcurrency(100)
- * .connectionTimeout(Duration.ofSeconds(1))
- * .connectionMaxIdleTime(Duration.ofSeconds(5))
- * .build();
+ * SdkHttpClient client = AwsCrtHttpClient.builder()
+ *                                     .maxConcurrency(100)
+ *                                     .connectionTimeout(Duration.ofSeconds(1))
+ *                                     .connectionMaxIdleTime(Duration.ofSeconds(5))
+ *                                     .build();
  *}
  *
  */
@@ -68,13 +66,13 @@ public final class AwsCrtHttpClient extends AwsCrtHttpClientBase implements SdkH
      *
      * @return an {@link SdkHttpClient}
      */
-    public static AwsCrtHttpClient create() {
+    public static SdkHttpClient create() {
         return new DefaultBuilder().build();
     }
 
     @Override
     public String clientName() {
-        return SdkHttpClient.super.clientName();
+        return super.clientName();
     }
 
     @Override
@@ -98,39 +96,7 @@ public final class AwsCrtHttpClient extends AwsCrtHttpClientBase implements SdkH
                                                          .readBufferSize(this.readBufferSize)
                                                          .request(request)
                                                          .build();
-            return new ExecutableHttpRequest() {
-                volatile CompletableFuture<SdkHttpFullResponse> responseFuture;
-
-                @Override
-                public HttpExecuteResponse call() throws IOException {
-                    HttpExecuteResponse.Builder builder = HttpExecuteResponse.builder();
-
-                    try {
-                        responseFuture = new CrtRequestExecutor().execute(context);
-                        SdkHttpFullResponse response = responseFuture.get();
-                        builder.response(response);
-                        builder.responseBody(response.content().orElse(null));
-                        return builder.build();
-                    } catch (InterruptedException | ExecutionException e) {
-                        if (e.getCause() instanceof IOException) {
-                            throw (IOException) e.getCause();
-                        }
-
-                        if (e.getCause() instanceof HttpException) {
-                            throw (HttpException) e.getCause();
-                        }
-
-                        throw new RuntimeException(e);
-                    }
-                }
-
-                @Override
-                public void abort() {
-                    if (responseFuture != null) {
-                        responseFuture.cancel(true);
-                    }
-                }
-            };
+            return new CrtExecutableHttpRequest(context);
         }
     }
 
@@ -282,4 +248,40 @@ public final class AwsCrtHttpClient extends AwsCrtHttpClientBase implements SdkH
         }
     }
 
+    private static final class CrtExecutableHttpRequest implements ExecutableHttpRequest {
+        private final CrtRequestContext context;
+        private volatile CompletableFuture<SdkHttpFullResponse> responseFuture;
+
+        CrtExecutableHttpRequest(CrtRequestContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public HttpExecuteResponse call() throws IOException {
+            HttpExecuteResponse.Builder builder = HttpExecuteResponse.builder();
+
+            try {
+                responseFuture = new CrtRequestExecutor().execute(context);
+                SdkHttpFullResponse response = CompletableFutureUtils.joinLikeSync(responseFuture);
+                builder.response(response);
+                builder.responseBody(response.content().orElse(null));
+                return builder.build();
+            } catch (CompletionException e) {
+                Throwable cause = e.getCause();
+                if (cause instanceof IOException) {
+                    throw (IOException) cause;
+                }
+
+                // Should not happen
+                throw new RuntimeException(e);
+            }
+        }
+
+        @Override
+        public void abort() {
+            if (responseFuture != null) {
+                responseFuture.cancel(true);
+            }
+        }
+    }
 }

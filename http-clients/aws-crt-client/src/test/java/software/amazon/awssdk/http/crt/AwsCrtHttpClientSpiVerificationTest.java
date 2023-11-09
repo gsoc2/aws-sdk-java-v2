@@ -24,6 +24,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static java.util.Collections.emptyMap;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static software.amazon.awssdk.http.crt.CrtHttpClientTestUtils.createRequest;
 
 import com.github.tomakehurst.wiremock.http.Fault;
@@ -97,7 +98,7 @@ public class AwsCrtHttpClientSpiVerificationTest {
     }
 
 
-    @Test(expected = HttpException.class)
+    @Test
     public void requestFailed_notRetryable_shouldNotWrapException() throws IOException {
         try (SdkHttpClient client = AwsCrtHttpClient.builder().build()) {
             URI uri = URI.create("http://localhost:" + mockServer.port());
@@ -115,7 +116,7 @@ public class AwsCrtHttpClientSpiVerificationTest {
             executeRequestBuilder.request(request);
             executeRequestBuilder.contentStreamProvider(() -> new ByteArrayInputStream(new byte[0]));
             ExecutableHttpRequest executableRequest = client.prepareRequest(executeRequestBuilder.build());
-            executableRequest.call();
+            assertThatThrownBy(() -> executableRequest.call()).isInstanceOf(HttpException.class);
         }
     }
 
